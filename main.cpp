@@ -887,8 +887,8 @@ public:
 		sprite.setTexture(&charactersText);
 		sprite.setTextureRect(frame);
 
-		smoothed = sprite;
-		smoothed.setFillColor(sf::Color(255, 255, 255, 80));
+		ghost = sprite;
+		ghost.setFillColor(sf::Color(255, 255, 255, 80));
 
 		flare.setSize(sf::Vector2f(flareFrame.width*scale*0.5,
 				flareFrame.height*scale*0.5));
@@ -934,6 +934,7 @@ public:
 
 		}
 
+		health = 0;
 		setHealth(100);
 		variance = 6;
 		data = NULL;
@@ -944,6 +945,9 @@ public:
 		importantMoves.resize(200);
 		replaying = false;
 		classNum = 0;
+
+		characters = NULL;
+		lerpCam = false;
 
 	}
 
@@ -1053,9 +1057,24 @@ public:
 				flare.setRotation(rot+flareAngle);
 				mPos.x = clamp(mPos.x, 0.0, 854.0) - 427;
 				mPos.y = clamp(mPos.y, 0.0, 480.0) - 240;
-				camPos = pos;
-				camPos.x -= 854/2 - mPos.x/1.5;
-				camPos.y -= 480/2 - mPos.y/1.5;
+
+				if(lerpCam)
+				{
+					fakeCam += (correctionPos - fakeCam) * 0.1f;
+					correctionPos += (nextPos - correctionPos) * smoothFac;
+					smoothFac += (1.0f - smoothFac) * 0.15f;
+
+				}
+				else
+				{
+					fakeCam += (pos - fakeCam) * 0.1f;
+
+				}
+
+				camPos = fakeCam;
+
+				camPos.x -= 854/2 - mPos.x/zoom;
+				camPos.y -= 480/2 - mPos.y/zoom;
 
 				if(classNum == 3)
 					zoom = 2;
@@ -1160,26 +1179,12 @@ public:
 			sf::Vector2f pos = getPosition();
 			if(pos != nextPos)
 			{
-				/*std::cout << "iterpolate to: " << nextPos.x << ", " << nextPos.y << "\n";
-				std::cout << "from: " << pos.x << ", " << pos.y << "\n";*/
 				pos += (nextPos - pos) * smoothFac;
 				setPosition(pos);
 				smoothFac += (1.0 - smoothFac) * 0.15f;
 
 			}
 
-			//setPosition(lerp(getPosition(), nextPos, smoothFac));
-
-			/*float d = nextRot - getRotation();
-			if(d > 1.5)
-			{
-				float l = lerp(nextRot, getRotation());
-				sprite.setRotation(l);
-				flare.setRotation(l);
-
-			}*/
-
-			//
 
 		}
 
@@ -1188,27 +1193,39 @@ public:
 	void draw(sf::RenderWindow& window,
 			sf::RenderStates states = sf::RenderStates::Default)
 	{
-		states.transform *= getTransform();
+		if(lerpCam)
+		{
+			sf::Transformable t;
+			t.setPosition(correctionPos);
+			t.setOrigin(getOrigin());
+			t.rotate(getRotation());
+			t.scale(getScale());
+			states.transform *= t.getTransform();
+
+		}
+		else
+		{
+			states.transform *= getTransform();
+
+		}
+
 		window.draw(shape, states);
 
-		/*states.shader = &bloomShader;
-		float ratio = (float)flare.getFillColor().a/255.0;
-		bloomShader.setParameter("ratio", 0.025);
-		bloomShader.setParameter("alpha", ratio);*/
 		window.draw(flare, states);
 
 		states.shader = &waveShader;
 		waveShader.setParameter("wave_phase", waveTimer.getElapsedTime().asSeconds());
 		waveShader.setParameter("wave_amplitude", 0.01*40, 0.01*40);
 		waveShader.setParameter("blur_radius", (0.2) * 0.008f);
+
 		window.draw(sprite, states);
 
-		//if(playerType == Local)
-			window.draw(smoothed);
+		window.draw(ghost);
 
 		states.shader = NULL;
 		window.draw(nameTag, states);
 		window.draw(pingText, states);
+
 
 		if(playerType == Local)
 		{
@@ -1354,13 +1371,12 @@ public:
 		setHealth(nhealth);
 		sf::Vector2f oldpos = getPosition();
 
-    	smoothed.setPosition(pos);
-    	smoothed.setRotation(nrot);
+    	ghost.setPosition(pos);
+    	ghost.setRotation(nrot);
     	pingText.setString(toString(ping));
     	pingText.setOrigin((int)pingText.getLocalBounds().width/2, (int)pingText.getLocalBounds().height/2);
 
 		//TODO: add smoothing
-
 		if(playerType == Local)
 		{
 			//get rid of old moves
@@ -1371,10 +1387,24 @@ public:
 	            moves.remove();
 
 	        if(moves.empty())
+	        {
+	        	lerpCam = false;
+	        	ghost.setFillColor(sf::Color(255, 255, 255, 80));
+	        	setPosition(pos);
 	        	return;
+
+	        }
 
 	        if(pos != moves.oldest().pos)
 	        {
+	        	if(!lerpCam)
+	        	{
+					lerpCam = true;
+		        	correctionPos = oldpos;
+		        	smoothFac = 0.2f;
+
+	        	}
+
 	        	//std::cout << "replaying\n";
 	        	Input prev = input;
 	        	Input daone= moves.oldest().input;
@@ -1404,19 +1434,14 @@ public:
 				resolveMapCollisions();
 				input = prev;
 	        	replaying = false;
+	        	nextPos = getPosition();
+	        	ghost.setFillColor(sf::Color(255, 100, 100, 200));
 
-	        	/*sf::Vector2f npos = getPosition();
-
-	        	sf::Vector2f dif = oldpos - npos;
-	        	float dist = sqrt(pow(dif.x, 2) + pow(dif.y, 2));
-	        	if(dist >= 8)
-	        	{
-	        		setPosition(npos);
-	        		pos = lerp(oldpos, pos);
-	        		//dif = oldpos - pos;
-	        		smoothed.setPosition(pos); //TODO: is this ok
-
-	        	}*/
+	        }
+	        else
+	        {
+	        	ghost.setFillColor(sf::Color(255, 255, 255, 80));
+	        	lerpCam = false;
 
 	        }
 
@@ -1435,16 +1460,12 @@ public:
 			{
 				std::cout << "teleporting\n";
 				setPosition(nextPos);
-				smoothFac = 0.1;
+				smoothFac = 0.1f;
 
 			}
 			else if(dist > 0.1)
 			{
-				//std::cout << "oldpos: " << oldpos.x << ", " << oldpos.y << "\n";
-				//std::cout << "pos: " << pos.x << ", " << pos.y << "\n";
-				//std::cout << "big gap\n";
-				//setPosition(nextPos);
-				smoothFac = 0.1;
+				smoothFac = 0.1f;
 
 			}
 			else
@@ -1452,17 +1473,8 @@ public:
 				setPosition(pos);
 
 			}
-			/*else if(dist >= 8)
-			{
-				smoothFac = 0.1;
-
-			}*/
 
 			vel = nvel;
-			/*float l = lerp(nRot, getRotation());
-			nRot = nrot;
-			sprite.setRotation(l);
-			flare.setRotation(l);*/
 
 		}
 
@@ -1502,6 +1514,40 @@ public:
 
 	void resolveMapCollisions()
 	{
+		if(characters != NULL)
+		{
+			for(unsigned int i = 0; i < characters->size(); i++)
+			{
+				Character& other = (*characters)[i];
+				if(&other == this)
+					continue;
+
+				sf::Vector2f pos = getPosition();
+				sf::Vector2f opos = other.getPosition();
+				sf::Vector2f diff = pos - opos;
+				float dist = sqrt(pow(diff.x, 2) + pow(diff.y, 2));
+				float totalRadius = getRadius() + other.getRadius();
+				float intersection = totalRadius - dist;
+				if(intersection > 0)
+				{
+					if(dist != 0)
+					{
+						diff /= dist;
+
+					}
+
+					pos += diff*0.5f*intersection;
+					opos -= diff*0.5f*intersection;
+
+					setPosition(pos);
+					other.setPosition(opos);
+
+				}
+
+			}
+
+		}
+
 		for(unsigned int j = 0; j < mapRects.size(); j++)
 		{
 			sf::FloatRect inter;
@@ -1592,7 +1638,7 @@ public:
 	CircularBuffer moves;
 	CircularBuffer importantMoves;
 	bool replaying;
-	sf::RectangleShape smoothed;
+	sf::RectangleShape ghost;
 
 	unsigned int classNum;
 	uint16_t netId;
@@ -1602,8 +1648,13 @@ public:
 	float nextRot;
 	float smoothFac;
 
-	Input previous;
 	sf::Clock aiTimer;
+
+	std::vector<Character>* characters;
+	bool lerpCam;
+	sf::Vector2f fakeCam;
+	sf::Vector2f correctionPos;
+	float camInterp;
 
 };
 
@@ -1779,42 +1830,6 @@ Character& makeAssault2(std::list<Character>& characters,
 
 }
 
-Character& makeAssault3(std::list<Character>& characters,
-		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
-		std::string name)
-{
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 10,
-			sf::IntRect(372, 256, 82, 100), sf::Vector2f(36, 18), 0.25);
-	Character character(playerType, team, pos,
-				32, sf::IntRect(279, 0, 146, 210), 0.5,
-				sf::Vector2f(72, 125), sf::Vector2f(80, 115),
-				sf::IntRect(320, 382, 200, 700), 2, 8, 0.83, 50, 0.01, bullet,
-				assault3Sound, 3, 0.4);
-	character.setName(name);
-
-	std::vector<Gib> gibs;
-	gibs.push_back(Gib(greenGib, sf::IntRect(0, 0, 64, 72), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64, 0, 72, 72), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72, 0, 104, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	Gib gunGib(greenGib, sf::IntRect(64+72+104, 0, 152, 96), 0.5, sf::Vector2f(0, 0),
-				15, 0, 0, 60);
-	gunGib.bloody = false;
-	gibs.push_back(gunGib);
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72+104+152, 0, 104, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72+104+152+104, 0, 71, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	character.setGibs(gibs);
-	character.classNum = 2;
-
-	characters.push_back(character);
-	return (*characters.rbegin());
-
-}
-
 Character& makeSniper(std::list<Character>& characters,
 		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
 		std::string name)
@@ -1917,42 +1932,7 @@ Character& makeAssault2(std::vector<Character>& characters,
 			15, 0, 0, 60));
 	character.setGibs(gibs);
 	character.classNum = 1;
-
-	characters.push_back(character);
-	return characters[characters.size()-1];
-
-}
-
-Character& makeAssault3(std::vector<Character>& characters,
-		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
-		std::string name)
-{
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 10,
-			sf::IntRect(372, 256, 82, 100), sf::Vector2f(36, 18), 0.25);
-	Character character(playerType, team, pos,
-				32, sf::IntRect(279, 0, 146, 210), 0.5,
-				sf::Vector2f(72, 125), sf::Vector2f(80, 115),
-				sf::IntRect(320, 382, 200, 700), 2, 8, 0.83, 50, 0.01, bullet,
-				assault3Sound, 3, 0.4);
-	character.setName(name);
-
-	std::vector<Gib> gibs;
-	gibs.push_back(Gib(greenGib, sf::IntRect(0, 0, 64, 72), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64, 0, 72, 72), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72, 0, 104, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	Gib gunGib(greenGib, sf::IntRect(64+72+104, 0, 152, 96), 0.5, sf::Vector2f(0, 0),
-				15, 0, 0, 60);
-	gunGib.bloody = false;
-	gibs.push_back(gunGib);
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72+104+152, 0, 104, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	gibs.push_back(Gib(greenGib, sf::IntRect(64+72+104+152+104, 0, 71, 96), 0.5, sf::Vector2f(0, 0),
-			15, 0, 0, 60));
-	character.setGibs(gibs);
-	character.classNum = 2;
+	character.characters = &characters;
 
 	characters.push_back(character);
 	return characters[characters.size()-1];
@@ -1988,6 +1968,7 @@ Character& makeSniper(std::vector<Character>& characters,
 			15, 0, 0, 60));
 	character.setGibs(gibs);
 	character.classNum = 3;
+	character.characters = &characters;
 
 	characters.push_back(character);
 	return characters[characters.size()-1];
@@ -1998,28 +1979,32 @@ Character& makeSniper(std::vector<Character>& characters,
 void resolveCollisions(std::vector<Character>& characters, int i)
 {
 	Character& character = characters[i];
-	for(unsigned int j = i+1; j < characters.size(); j++)
+	if(character.characters == NULL)
 	{
-		Character& other = characters[j];
-		sf::Vector2f pos = character.getPosition();
-		sf::Vector2f opos = other.getPosition();
-		sf::Vector2f diff = pos - opos;
-		float dist = sqrt(pow(diff.x, 2) + pow(diff.y, 2));
-		float totalRadius = character.getRadius() + other.getRadius();
-		float intersection = totalRadius - dist;
-		if(intersection > 0)
+		for(unsigned int j = i+1; j < characters.size(); j++)
 		{
-			if(dist != 0)
+			Character& other = characters[j];
+			sf::Vector2f pos = character.getPosition();
+			sf::Vector2f opos = other.getPosition();
+			sf::Vector2f diff = pos - opos;
+			float dist = sqrt(pow(diff.x, 2) + pow(diff.y, 2));
+			float totalRadius = character.getRadius() + other.getRadius();
+			float intersection = totalRadius - dist;
+			if(intersection > 0)
 			{
-				diff /= dist;
+				if(dist != 0)
+				{
+					diff /= dist;
+
+				}
+
+				pos += diff*0.5f*intersection;
+				opos -= diff*0.5f*intersection;
+
+				character.setPosition(pos);
+				other.setPosition(opos);
 
 			}
-
-			pos += diff*0.5f*intersection;
-			opos -= diff*0.5f*intersection;
-
-			character.setPosition(pos);
-			other.setPosition(opos);
 
 		}
 
@@ -2035,6 +2020,9 @@ void resolveCollisions(Character& character, std::list<Character>& characters)
 	for(it = characters.begin(); it != characters.end(); it++)
 	{
 		Character& other = (*it);
+		if((&other) == (&character))
+			continue;
+
 		sf::Vector2f pos = character.getPosition();
 		sf::Vector2f opos = other.getPosition();
 		sf::Vector2f diff = pos - opos;
@@ -2076,11 +2064,7 @@ void resolveCollisions(std::vector<Character>& characters, Gib& gib)
 		float intersection = totalRadius - dist;
 		if(intersection > 0)
 		{
-			if(dist != 0)
-			{
-				diff /= dist;
-
-			}
+			diff /= dist;
 
 			pos += diff*intersection;
 			gib.setPosition(pos);
@@ -2358,6 +2342,8 @@ int main(int argc, char** argv)
 
 	}
 
+
+	red.setFillColor(sf::Color::Transparent);
 
 	srand(time(NULL));
 
@@ -2800,7 +2786,7 @@ void runServer()
 
 						}
 
-						unsigned int classNum = rand()%4;
+						unsigned int classNum = rand()%3;
 
 						Character* charac = NULL;
 						if(classNum == 0)
@@ -2817,12 +2803,6 @@ void runServer()
 						}
 						else if(classNum == 2)
 						{
-							charac = &makeAssault3(characters, Character::Local,
-									data.team, spawnLocal, data.username);
-
-						}
-						else if(classNum == 3)
-						{
 							charac = &makeSniper(characters, Character::Local,
 									data.team, spawnLocal, data.username);
 
@@ -2837,17 +2817,17 @@ void runServer()
 						p << (int)Spawn; //int
 						unsigned int size = 1;
 						p << size; //unsigned int
-						std::cout << "\nserver\n";
-						std::cout << "spawning: " << size << " players\n";
+						/*std::cout << "\nserver\n";
+						std::cout << "spawning: " << size << " players\n";*/
 						sf::Vector2f cPos = data.character->getPosition();
 						std::string cName = data.character->getName();
 						int team = (int)data.character->team;
 						uint16_t id = data.character->netId;
-						std::cout << "spawning: \"" << cName << "\"\n";
+						/*std::cout << "spawning: \"" << cName << "\"\n";
 						std::cout << "with Id: " << id << "\n";
 						std::cout << "on Team: " << team << "\n";
 						std::cout << "as Class: " << classNum << "\n";
-						std::cout << "at Pos: " << cPos.x << ", " << cPos.y << "\n";
+						std::cout << "at Pos: " << cPos.x << ", " << cPos.y << "\n";*/
 						//string, uint16_t, unsigned int, unsigned int, float, float
 						p << cName << id << team << classNum << cPos.x << cPos.y;// << data.character->netId << (unsigned int)cTeam << charac->classNum << cPos.y << cPos.y;
 						broadcast(peers, p, NULL, 0, true, server, true);
@@ -3184,8 +3164,8 @@ bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 {
 	unsigned int size = 0; //unsigned int
 	packet >> size;
-	std::cout << "\nclient\n";
-	std::cout << "spawning: " << size << " players\n";
+	/*std::cout << "\nclient\n";
+	std::cout << "spawning: " << size << " players\n";*/
 	bool me = false;
 	for(unsigned int i = 0; i < size; i++)
 	{
@@ -3197,17 +3177,16 @@ bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 
 		packet >> username >> id >> team >> classNum >> pos.x >> pos.y;
 
-		std::cout << "spawning: \"" << username << "\"\n";
+		/*std::cout << "spawning: \"" << username << "\"\n";
 		std::cout << "with Id: " << id << "\n";
 		std::cout << "on Team: " << team << "\n";
 		std::cout << "as Class: " << classNum << "\n";
-		std::cout << "at Pos: " << pos.x << ", " << pos.y << "\n";
+		std::cout << "at Pos: " << pos.x << ", " << pos.y << "\n";*/
 
 		Character::PlayerType playerType = Character::Net;
+		sf::Vector2f fakeCam = camPos;
 		if(username == cl_username)
 		{
-			camPos.x = pos.x - 854/2;
-			camPos.y = pos.y - 240;
 			playerType = Character::Local;
 			me = true;
 		}
@@ -3253,6 +3232,7 @@ bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 			Character& c = makeAssault1(characters, playerType,
 				(Bullet::Team)team, pos, username);
 			c.netId = id;
+			c.fakeCam = fakeCam;
 
 		}
 		else if(classNum == 1)
@@ -3260,20 +3240,15 @@ bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 			Character& c = makeAssault2(characters, playerType,
 				(Bullet::Team)team, pos, username);
 			c.netId = id;
+			c.fakeCam = fakeCam;
 
 		}
 		else if(classNum == 2)
 		{
-			Character& c = makeAssault3(characters, playerType,
-				(Bullet::Team)team, pos, username);
-			c.netId = id;
-
-		}
-		else if(classNum == 3)
-		{
 			Character& c = makeSniper(characters, playerType,
 				(Bullet::Team)team, pos, username);
 			c.netId = id;
+			c.fakeCam = fakeCam;
 
 		}
 
@@ -3608,6 +3583,8 @@ void runClient()
 	bool blueWon = true;
 	sf::Clock restartTimer;
 
+	camPos = fountainShape.getPosition() - sf::Vector2f(427, 240);
+
 	while(attempts < 11 && constate != 2)
 	{
 		if(constate == 0)
@@ -3674,7 +3651,6 @@ void runClient()
 
 	sf::Clock respawnTimer;
 	sf::Vector2f lastPos;
-	unsigned int inputWait = 0;
 	while(window.isOpen() && connected)
 	{
 		{
@@ -3800,8 +3776,7 @@ void runClient()
 					gibs.clear();
 					bullets.clear();
 
-					camPos.x = 4096/2;
-					camPos.y = 1536/2 - 240;
+					camPos = fountainShape.getPosition() - sf::Vector2f(427, 240);
 					respawning = false;
 					blueCore.setPosition(blueCoreSpawn);
 					blueCore.setRotation(0);
@@ -4023,24 +3998,17 @@ void runClient()
 			Character& character = characters[i];
 			if(character.getName() == cl_username)
 			{
-				character.previous = character.input;
 				character.input = input;
 				character.update();
 				lastPos = character.getPosition();
 
 				if(hasFocus)
 				{
-					if(character.previous != input || inputWait > 2)
-					{
-						//input.aimAngle = character.sprite.getRotation();
-						sf::Packet p;
-						p << (int)SyncInput;
-						input.pack(p);
-						character.packImportant(p);
-						send(server, p, 1, false, client);
-						inputWait = 0;
-
-					}
+					sf::Packet p;
+					p << (int)SyncInput;
+					input.pack(p);
+					character.packImportant(p);
+					send(server, p, 1, false, client);
 
 				}
 
@@ -4152,7 +4120,7 @@ void runClient()
 		}
 
 		sf::Color rcolor = red.getFillColor();
-		if(rcolor.a > 0)
+		if(rcolor.a != 0)
 		{
 			if(rcolor.a >= 10)
 				rcolor.a -= 10;
@@ -4188,7 +4156,6 @@ void runClient()
 		}
 
 		window.display();
-		inputWait++;
 
 	}
 
