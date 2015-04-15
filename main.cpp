@@ -15,6 +15,8 @@
 #include <assert.h>
 #include <stdint.h>
 #include <SFML/System.hpp>
+#include <queue>
+#include "Misc.h"
 
 #ifdef __linux__
 #include <unistd.h>
@@ -66,7 +68,8 @@ typedef enum NetCommand
 	CoreDropped,
 	CoreReturned,
 	CoreCaptured,
-	GameOver
+	GameOver,
+	GrenadeSync
 
 } NetCommand;
 
@@ -259,6 +262,8 @@ sf::Texture brownGib;
 sf::Texture greenGib;
 sf::Texture sniperGib;
 sf::Texture coreText;
+sf::Texture grenadeText;
+sf::Texture explosionText;
 
 sf::Texture mapText;
 sf::Texture treeText;
@@ -296,6 +301,12 @@ sf::Sound rthtf;
 sf::SoundBuffer rtsBuffer;
 sf::Sound rts;
 
+sf::SoundBuffer explodeBuffer;
+sf::Sound explode;
+
+sf::SoundBuffer wooshBuffer;
+sf::Sound woosh;
+
 sf::Font font;
 
 sf::Vector2f camPos;
@@ -322,47 +333,6 @@ FeedBuffer gameInfo(font, 12, 10.0, false);
 std::ofstream logFile;
 
 sf::View guiView(sf::FloatRect(0, 0, 854, 480));
-
-float clamp(float n, float lower, float upper)
-{
-	return std::max(lower, std::min(n, upper));
-
-}
-
-void playSound(sf::Sound& sound, sf::Vector2f pos, float max)
-{
-	sf::Vector2f dif = camPos - pos;
-	float dist = sqrt(pow(dif.x, 2) + pow(dif.y, 2));
-	float ratio = dist/2000;
-	ratio = clamp(ratio, 0.0, 1.0);
-	ratio = 1 - ratio;
-	sound.setVolume(max*ratio);
-	sound.play();
-
-}
-
-
-std::string toString(int i)
-{
-	std::stringstream ss;
-	ss << i;
-	std::string s;
-	ss >> s;
-	return s;
-
-}
-
-sf::Vector2f lerp(sf::Vector2f current, sf::Vector2f target, float fac = 0.16)
-{
-	return current + (target - current) * fac;
-
-}
-
-float lerp(float current, float target, float fac = 0.16)
-{
-	return current + (target - current) * fac;
-
-}
 
 class Gib : public sf::Transformable
 {
@@ -575,241 +545,6 @@ public:
 
 };
 
-class Input
-{
-public:
-	Input() :
-		up(false),
-		down(false),
-		left(false),
-		right(false),
-		shoot(false),
-		reload(false),
-		aimAngle(0)
-	{
-	}
-
-	void set(sf::RenderWindow& window, sf::View view, sf::Vector2f pos)
-	{
-		if(hasFocus)
-		{
-			mPos = sf::Mouse::getPosition(window);
-			sf::Vector2f aimPos = window.mapPixelToCoords(mPos, view);
-			aimPos -= pos;
-			aimAngle = (-atan2(aimPos.x, aimPos.y)*180/3.14159)+180;
-			aimAngle = (unsigned int)aimAngle/2.0;
-			aimAngle *= 2.0;
-
-			up = sf::Keyboard::isKeyPressed(sf::Keyboard::W);
-			down = sf::Keyboard::isKeyPressed(sf::Keyboard::S);
-			left = sf::Keyboard::isKeyPressed(sf::Keyboard::A);
-			right = sf::Keyboard::isKeyPressed(sf::Keyboard::D);
-			shoot = sf::Mouse::isButtonPressed(sf::Mouse::Left);
-			reload = sf::Keyboard::isKeyPressed(sf::Keyboard::R);
-
-		}
-
-	}
-
-	void pack(sf::Packet& packet)
-	{
-		//2 bytes
-		uint8_t flags = 0;
-		flags = up ? flags|(1<<0) : flags;
-		flags = down ? flags|(1<<1) : flags;
-		flags = left ? flags|(1<<2) : flags;
-		flags = right ? flags|(1<<3) : flags;
-		uint8_t r = (unsigned int)(aimAngle/2.0);
-		packet << flags << r;
-
-	}
-
-	void unpack(sf::Packet& packet)
-	{
-		uint8_t flags = 0;
-		uint8_t r = 0;
-		packet >> flags >> r;
-		up = (flags&(1<<0)) != 0;
-		down = (flags&(1<<1)) != 0;
-		left = (flags&(1<<2)) != 0;
-		right = (flags&(1<<3)) != 0;
-		aimAngle = (float)(((unsigned int)r)*2.0);
-
-	}
-
-	bool operator==(const Input& rhs)
-	{
-		return up == rhs.up && down == rhs.down
-				&& left == rhs.left && right == rhs.right;
-
-	}
-
-	bool operator!=(const Input& rhs)
-	{
-		return up != rhs.up || down != rhs.down
-				|| left != rhs.left || right != rhs.right;
-
-	}
-
-	//sent
-	bool up;
-	bool down;
-	bool left;
-	bool right;
-
-	//not sent
-	bool shoot;
-	bool reload;
-
-	//sent
-	float aimAngle;
-
-	//not sent
-	sf::Vector2i mPos;
-
-};
-
-class Move
-{
-public:
-	Move()
-	{
-		t = 0;
-
-	}
-
-	Move(Input input, sf::Vector2f pos, unsigned int t) :
-		input(input),
-		pos(pos),
-		t(t)
-	{
-	}
-
-	void pack(sf::Packet& packet)
-	{
-		//5 bytes - can I make t be wrapping so I can lower it's byte size
-		uint8_t flags = 0;
-		flags = input.up ? flags|(1<<0) : flags;
-		flags = input.down ? flags|(1<<1) : flags;
-		flags = input.left ? flags|(1<<2) : flags;
-		flags = input.right ? flags|(1<<3) : flags;
-		packet << t << flags;
-
-	}
-
-	void unpack(sf::Packet& packet)
-	{
-		uint8_t flags = 0;
-		packet >> t >> flags;
-		input.up = (flags&(1<<0)) != 0;
-		input.down = (flags&(1<<1)) != 0;
-		input.left = (flags&(1<<2)) != 0;
-		input.right = (flags&(1<<3)) != 0;
-
-	}
-
-	Input input;
-	sf::Vector2f pos;
-	unsigned int t;
-
-};
-
-class CircularBuffer
-{
-public:
-	int head;
-	int tail;
-
-	CircularBuffer()
-	{
-		head = 0;
-		tail = 0;
-
-	}
-
-	void resize(int size)
-	{
-		head = 0;
-		tail = 0;
-		moves.reserve(size);
-		moves.resize(size);
-
-	}
-
-	int size()
-	{
-		int count = head - tail;
-		if (count < 0)
-			count += (int)moves.size();
-		return count;
-
-	}
-
-	void add(const Move &move)
-	{
-		moves[head] = move;
-		next(head);
-
-	}
-
-	void remove()
-	{
-		assert(!empty());
-		next(tail);
-
-	}
-
-	Move& oldest()
-	{
-		assert(!empty());
-		return moves[tail];
-
-	}
-
-	Move& newest()
-	{
-		assert(!empty());
-		int index = head-1;
-		if (index==-1)
-			index = (int) moves.size() - 1;
-		return moves[index];
-
-	}
-
-	bool empty() const
-	{
-		return head==tail;
-
-	}
-
-	void next(int &index)
-	{
-		index ++;
-		if (index>=(int)moves.size())
-			index -= (int)moves.size();
-
-	}
-
-	void previous(int &index)
-	{
-		index --;
-		if (index<0)
-		index += (int)moves.size();
-
-	}
-
-	Move& operator[](int index)
-	{
-		assert(index>=0);
-		assert(index<(int)moves.size());
-		return moves[index];
-
-	}
-
-	std::vector<Move> moves;
-
-};
-
 sf::RectangleShape red;
 
 class Character : public sf::Transformable
@@ -911,9 +646,22 @@ public:
 		pingText.setFont(font);
 		pingText.setCharacterSize(25);
 		if(playerType == Local)
+		{
 			healthBar.setPosition(70, 460);
+			ammoText.setFont(font);
+			ammoText.setCharacterSize(30);
+			ammoText.setPosition(854 - 150, 430);
+			std::string a = toString(magSize);
+			ammoText.setString(a + " / " + a);
+
+		}
 		else
+		{
 			healthBar.setPosition(0, -36);
+
+		}
+
+
 		healthBar.setOutlineColor(sf::Color::Black);
 		healthBar.setOutlineThickness(1);
 
@@ -923,6 +671,7 @@ public:
 			pingText.setColor(sf::Color::Cyan);
 			shape.setOutlineColor(sf::Color::Cyan);
 			healthBar.setFillColor(sf::Color(0, 255, 255, 75));
+			ammoText.setColor(sf::Color::Cyan);
 
 		}
 		else
@@ -931,6 +680,7 @@ public:
 			pingText.setColor(sf::Color::Red);
 			shape.setOutlineColor(sf::Color::Red);
 			healthBar.setFillColor(sf::Color(255, 0, 0, 75));
+			ammoText.setColor(sf::Color::Red);
 
 		}
 
@@ -948,8 +698,12 @@ public:
 
 		characters = NULL;
 		lerpCam = false;
+		grenades = 0;
 
 	}
+
+	sf::Vector2f superCam;
+	sf::Vector2f superCamTarget;
 
 	void update()
 	{
@@ -958,7 +712,7 @@ public:
 		if(playerType == Local)
 		{
 			/*add the new move to the circular buffers*/
-			if(!replaying)
+			if(!replaying && !g_isServer)
 			{
 				Move move(input, getPosition(), tframe);
 				if(!moves.empty())
@@ -1039,6 +793,8 @@ public:
 
 		if(reloading && shootTimer.getElapsedTime().asSeconds() > reloadTime)
 		{
+			std::string a = toString(magSize);
+			ammoText.setString(a + " / " + a);
 			bulletsLeft = magSize;
 			reloading = false;
 
@@ -1046,9 +802,6 @@ public:
 
 		if(playerType == Local)
 		{
-			if(!hasFocus)
-				return;
-
 			if(!replaying)
 			{
 				sf::Vector2i mPos = input.mPos;
@@ -1061,7 +814,7 @@ public:
 				if(lerpCam)
 				{
 					fakeCam += (correctionPos - fakeCam) * 0.1f;
-					correctionPos += (nextPos - correctionPos) * smoothFac;
+					correctionPos += (pos - correctionPos) * smoothFac;
 					smoothFac += (1.0f - smoothFac) * 0.15f;
 
 				}
@@ -1072,9 +825,26 @@ public:
 				}
 
 				camPos = fakeCam;
+				sf::Vector2f mdif = input.raimPos - pos;
+				float mdist = sqrt(pow(mdif.x, 2) + pow(mdif.y, 2));
+				aimSize = (mdist+48)/bullet.speed*((float)variance/2.0);
+				if(aimSize < 8)
+					aimSize = 8;
+				if(mdist > 64*4.5)
+				{
+					superCamTarget.x = 854/2 - mPos.x/zoom;
+					superCamTarget.y = 480/2 - mPos.y/zoom;
 
-				camPos.x -= 854/2 - mPos.x/zoom;
-				camPos.y -= 480/2 - mPos.y/zoom;
+				}
+				else
+				{
+					superCamTarget.x = 854/2;
+					superCamTarget.y = 480/2;
+
+				}
+
+				superCam += (superCamTarget - superCam) * 0.1f;
+				camPos -= superCam;
 
 				if(classNum == 3)
 					zoom = 2;
@@ -1082,6 +852,9 @@ public:
 					zoom = 1.5;
 
 			}
+
+			if(!hasFocus)
+				return;
 
 			if(input.up)
 			{
@@ -1107,6 +880,13 @@ public:
 
 			}
 
+			if(input.secondary && grenades > 0)
+			{
+				grenades--;
+				input.throwing = true;
+
+			}
+
 			if(!reloading && input.shoot
 				&& shootTimer.getElapsedTime().asSeconds() > shootSpeed)
 			{
@@ -1122,9 +902,10 @@ public:
 				{
 					shooting = true;
 					bulletsLeft--;
-					flareAngle = (rand()%variance)-variance/2;
+					flareAngle = (float)(rand()%variance)-(float)variance/2.0;
 					flare.setFillColor(sf::Color(255, 255, 255, 255));
 					shootTimer.restart();
+					ammoText.setString(toString(bulletsLeft) + " / " + toString(magSize));
 
 				}
 
@@ -1232,7 +1013,7 @@ public:
 			sf::View v = window.getView();
 			window.setView(guiView);
 			window.draw(healthBar);
-
+			window.draw(ammoText);
 			window.setView(v);
 
 		}
@@ -1376,7 +1157,6 @@ public:
     	pingText.setString(toString(ping));
     	pingText.setOrigin((int)pingText.getLocalBounds().width/2, (int)pingText.getLocalBounds().height/2);
 
-		//TODO: add smoothing
 		if(playerType == Local)
 		{
 			//get rid of old moves
@@ -1401,7 +1181,7 @@ public:
 	        	{
 					lerpCam = true;
 		        	correctionPos = oldpos;
-		        	smoothFac = 0.2f;
+		        	smoothFac = 0.1f;
 
 	        	}
 
@@ -1632,6 +1412,8 @@ public:
 
 	Input input;
 
+	int grenades;
+
 	bool hasCore;
 
 	unsigned int tframe;
@@ -1656,42 +1438,181 @@ public:
 	sf::Vector2f correctionPos;
 	float camInterp;
 
+	sf::Text ammoText;
+
+	float aimSize;
+
 };
 
-ENetPacket* toEnet(sf::Packet sp, int flags)
+class Grenade : public sf::Transformable
 {
-	  ENetPacket* ep = enet_packet_create(sp.getData(), sp.getDataSize(), flags);
-	  return ep;
-
-}
-
-sf::Packet toSFML(ENetPacket* ep)
-{
-	sf::Packet sp;
-	sp.clear();
-	sp.append(ep->data, ep->dataLength);
-	return sp;
-
-}
-
-bool send(ENetPeer* peer, sf::Packet packet, unsigned int chan = 0,
-		bool reliable = false, ENetHost* host = NULL)
-{
-	ENetPacket* epacket = NULL;
-	epacket = toEnet(packet, reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
-	if(packet == NULL)
+public:
+	Grenade(sf::Vector2f pos, float angle, Bullet::Team team,
+			std::string owner) :
+		team(team),
+		owner(owner)
 	{
-		return false;
+		setPosition(pos);
+		shape.setRadius(16);
+		shape.setOrigin(16, 16);
+		shape.setFillColor(sf::Color::Transparent);
+		shape.setOutlineColor(sf::Color::Red);
+		shape.setOutlineThickness(1);
+
+		sprite.setSize(sf::Vector2f(24, 40));
+		sprite.setOrigin(12, 20);
+		sprite.setTexture(&grenadeText);
+		dead = false;
+		counter = (30*3) + 10; // 3 seconds
+		counterText.setFont(font);
+		counterText.setCharacterSize(20);
+		if(team == Bullet::Good)
+			counterText.setColor(sf::Color::Cyan);
+		else
+			counterText.setColor(sf::Color::Red);
+		counterText.setString("3");
+		counterText.setPosition(-5, -25);
+
+		vel.x = 40*cos(angle*3.14159/180);
+		vel.y = 40*sin(angle*3.14159/180);
+		sprite.setRotation(rand()%360);
+		frame = 0;
+
+		if(!g_isServer)
+			playSound(woosh, camPos, getPosition(), 100.0f);
+
 	}
 
-	enet_peer_send(peer, chan, epacket);
+	sf::FloatRect getBounds()
+	{
+		sf::FloatRect bounds = shape.getGlobalBounds();
+		bounds.left += getPosition().x;
+		bounds.top += getPosition().y;
+		return bounds;
 
-	if(host != NULL)
-		enet_host_flush(host);
+	}
 
-	return true;
+	void update()
+	{
+		counter--;
 
-}
+		if(counter > 10)
+		{
+			sprite.rotate(1.5);
+			if(counter > 30)
+				counterText.setString("3");
+			else if(counter > 20)
+				counterText.setString("2");
+			else
+				counterText.setString("1");
+
+			if(counter == 11)
+			{
+				sprite.setTexture(&explosionText);
+				sprite.setSize(sf::Vector2f(300, 300));
+				sprite.setOrigin(150, 150);
+				frame = 0;
+				sprite.setTextureRect(sf::IntRect(134*frame, 0, 134, 134));
+
+				if(!g_isServer)
+					playSound(explode, camPos, getPosition(), 150.0f);
+
+			}
+
+		}
+		else
+		{
+
+			frame++;
+			sprite.setTextureRect(sf::IntRect(134*frame, 0, 134, 134));
+
+			if(counter <= 0)
+			{
+				dead = true;
+
+			}
+
+		}
+
+		move(vel);
+		vel *= 0.93f;
+
+		for(unsigned int j = 0; j < mapRects.size(); j++)
+		{
+			sf::FloatRect inter;
+			if(mapRects[j].getGlobalBounds().intersects(getBounds(), inter))
+			{
+				if(inter.width > inter.height)
+				{
+					vel.y *= -0.83;
+					if(getPosition().y > inter.top)
+						move(0, inter.height);
+					else
+
+						move(0, -inter.height);
+
+				}
+				else
+				{
+					vel.x *= -0.83;
+					if(getPosition().x > inter.left)
+						move(inter.width, 0);
+					else
+						move(-inter.width, 0);
+
+				}
+
+			}
+
+		}
+
+	}
+
+	void update(std::list<Character>& characters)
+	{
+		update();
+		if(counter < 11)
+		{
+			std::list<Character>::iterator it;
+			for(it = characters.begin(); it != characters.end(); it++)
+			{
+				sf::Vector2f dif = getPosition() - it->getPosition();
+				float dist = sqrt(pow(dif.x, 2) + pow(dif.y, 2));
+				if(dist <= 160 && (it->team != team || owner == it->getName()))
+				{
+					it->setHealth(it->health-7);
+
+				}
+
+			}
+
+		}
+
+	}
+
+	void draw(sf::RenderWindow& window,
+			sf::RenderStates states = sf::RenderStates::Default)
+	{
+		states.transform *= getTransform();
+		window.draw(shape, states);
+		window.draw(sprite, states);
+
+		if(counter > 10)
+			window.draw(counterText, states);
+
+	}
+
+	sf::Vector2f vel;
+	Bullet::Team team;
+	sf::RectangleShape sprite;
+	sf::CircleShape shape;
+	std::string owner;
+	bool dead;
+	int counter;
+	sf::Text counterText;
+	int frame;
+
+};
 
 class PeerData
 {
@@ -1762,7 +1683,7 @@ Character& makeAssault1(std::list<Character>& characters,
 		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
 		std::string name)
 {
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 50, 8,
+	Bullet bullet(team, sf::Vector2f(0, 0), 0, 50, 10,
 			sf::IntRect(210, 0, 64, 402), sf::Vector2f(32, 30), 0.25);
 	Character character(playerType, team, pos,
 				32, sf::IntRect(0, 0, 144, 210), 0.5,
@@ -1788,6 +1709,7 @@ Character& makeAssault1(std::list<Character>& characters,
 			15, 0, 0, 60));
 	character.setGibs(gibs);
 	character.classNum = 0;
+	character.grenades = 1;
 
 	characters.push_back(character);
 	return (*characters.rbegin());
@@ -1798,7 +1720,7 @@ Character& makeAssault2(std::list<Character>& characters,
 		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
 		std::string name)
 {
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 4,
+	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 6,
 			sf::IntRect(43, 164, 70, 210), sf::Vector2f(35, 26), 0.25);
 	Character character(playerType, team, pos,
 				32, sf::IntRect(144, 0, 135, 210), 0.5,
@@ -1806,6 +1728,7 @@ Character& makeAssault2(std::list<Character>& characters,
 				sf::IntRect(0, 412, 144, 668), 2, 8, 0.83, 50, 0.05, bullet,
 				assault2Sound, 30, 2);
 	character.setName(name);
+	character.variance = 8;
 
 	std::vector<Gib> gibs;
 	gibs.push_back(Gib(redGib, sf::IntRect(0, 0, 64, 72), 0.5, sf::Vector2f(0, 0),
@@ -1858,7 +1781,7 @@ Character& makeSniper(std::list<Character>& characters,
 	gibs.push_back(Gib(sniperGib, sf::IntRect(64+72+104+152+104, 0, 71, 96), 0.5, sf::Vector2f(0, 0),
 			15, 0, 0, 60));
 	character.setGibs(gibs);
-	character.classNum = 3;
+	character.classNum = 2;
 
 	characters.push_back(character);
 	return (*characters.rbegin());
@@ -1870,7 +1793,7 @@ Character& makeAssault1(std::vector<Character>& characters,
 		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
 		std::string name)
 {
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 50, 8,
+	Bullet bullet(team, sf::Vector2f(0, 0), 0, 50, 10,
 			sf::IntRect(210, 0, 64, 402), sf::Vector2f(32, 30), 0.25);
 	Character character(playerType, team, pos,
 				32, sf::IntRect(0, 0, 144, 210), 0.5,
@@ -1896,6 +1819,7 @@ Character& makeAssault1(std::vector<Character>& characters,
 			15, 0, 0, 60));
 	character.setGibs(gibs);
 	character.classNum = 0;
+	character.grenades = 1;
 
 	characters.push_back(character);
 	return characters[characters.size()-1];
@@ -1906,7 +1830,7 @@ Character& makeAssault2(std::vector<Character>& characters,
 		Character::PlayerType playerType, Bullet::Team team, sf::Vector2f pos,
 		std::string name)
 {
-	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 4,
+	Bullet bullet(team, sf::Vector2f(0, 0), 0, 40, 6,
 			sf::IntRect(43, 164, 70, 210), sf::Vector2f(35, 26), 0.25);
 	Character character(playerType, team, pos,
 				32, sf::IntRect(144, 0, 135, 210), 0.5,
@@ -1914,6 +1838,7 @@ Character& makeAssault2(std::vector<Character>& characters,
 				sf::IntRect(0, 412, 144, 668), 2, 8, 0.83, 50, 0.05, bullet,
 				assault2Sound, 30, 2);
 	character.setName(name);
+	character.variance = 8;
 
 	std::vector<Gib> gibs;
 	gibs.push_back(Gib(redGib, sf::IntRect(0, 0, 64, 72), 0.5, sf::Vector2f(0, 0),
@@ -1967,7 +1892,7 @@ Character& makeSniper(std::vector<Character>& characters,
 	gibs.push_back(Gib(sniperGib, sf::IntRect(64+72+104+152+104, 0, 71, 96), 0.5, sf::Vector2f(0, 0),
 			15, 0, 0, 60));
 	character.setGibs(gibs);
-	character.classNum = 3;
+	character.classNum = 2;
 	character.characters = &characters;
 
 	characters.push_back(character);
@@ -2415,6 +2340,8 @@ void loadResources()
 		coreText.loadFromFile("res/core.png");
 		redCore.setTexture(&coreText);
 		blueCore.setTexture(&coreText);
+		grenadeText.loadFromFile("res/grenade.png");
+		explosionText.loadFromFile("res/explosion.png");
 
 		mapText.loadFromFile("res/robomap.png");
 		treeText.loadFromFile("res/robomaptrees.png");
@@ -2465,6 +2392,12 @@ void loadResources()
 		gameOverBuffer.loadFromFile("res/halosfx/gameover.wav");
 		gameOverSfx.setBuffer(gameOverBuffer);
 
+		explodeBuffer.loadFromFile("res/explode.wav");
+		explode.setBuffer(explodeBuffer);
+
+		wooshBuffer.loadFromFile("res/woosh.wav");
+		woosh.setBuffer(wooshBuffer);
+
 		font.loadFromFile("res/neuropol.ttf");
 
 		particles.add("blood", sf::Color(200, 20, 20), 0, sf::Vector2u(5, 5), 10000);
@@ -2506,6 +2439,7 @@ void runServer()
 	std::list<PeerData> peers;
 	std::list<Character> characters;
 	std::vector<Bullet> bullets;
+	std::vector<Grenade> grenades;
 
 	bool gameOver = false;
 	sf::Clock restartTimer;
@@ -2518,6 +2452,7 @@ void runServer()
 
 	}
 
+	//TODO: set tickrate to 30fps
 	while(server != NULL)
 	{
 		if(keepAliveTimer.getElapsedTime().asSeconds() > 30)
@@ -2530,11 +2465,10 @@ void runServer()
 
 		sf::Clock clock;
 		ENetEvent event;
-		bool shotweb = false;
-		sf::Packet shootPacket;
 		sf::Clock pollTimer;
+		std::queue<NewBulletData> newbullets;
 		while(enet_host_service(server, &event, 0) > 0
-				&& pollTimer.getElapsedTime().asMilliseconds() < 10)
+				&& pollTimer.getElapsedTime().asMilliseconds() < 15)
 		{
 			if(event.type == ENET_EVENT_TYPE_CONNECT)
 			{
@@ -2670,40 +2604,6 @@ void runServer()
 
 
 				}
-				else if(cmd == Shoot)
-				{
-
-					float angle;
-					packet >> angle;
-
-					PeerData* data = (PeerData*)(event.peer->data);
-					if(data->character != NULL)
-					{
-						if(!shotweb)
-						{
-							shootPacket << (int)Shoot;
-							shotweb = true;
-
-						}
-
-						Character& character = (*data->character);
-						character.flare.setRotation(angle+90); //+90 counte acts the -90 from getShotAngle
-
-						character.bullet.set(character.getShootPos(), angle);//don't need to counteract here because this is the thing that cares about -90
-						Bullet b(character.bullet);
-						b.owner = character.getName();
-
-						//TODO: step the bullet forward according to latency
-
-						bullets.push_back(b);
-
-						sf::Vector2f bPos = b.getPosition();
-
-						shootPacket << character.netId << bPos.x << bPos.y << angle;
-
-					}
-
-				}
 				else if(cmd == SyncInput)
 				{
 					//unpack player inputs
@@ -2738,6 +2638,100 @@ void runServer()
 
 						}
 
+						if(input.shooting)
+						{
+							character->sprite.setRotation(input.aimAngle);
+							character->flare.setRotation(input.aimAngle + input.flareAngle);
+							sf::Vector2f p = character->getShootPos();
+							float l = character->getShootAngle();
+							character->bullet.set(p, l);
+
+							float move = ((float)event.peer->lastRoundTripTime/2.0)/30.0;
+
+							Bullet b(character->bullet);
+
+							while(move > 0)
+							{
+								b.update(0.25);
+								move -= 0.25;
+								sf::Vector2f pos = b.getPosition();
+								float radius = b.getRadius();
+								bool hit = false;
+
+								for(unsigned int j = 0; j < mapRects.size(); j++)
+								{
+									sf::FloatRect inter;
+									if(mapRects[j].getGlobalBounds().intersects(b.getBounds(), inter))
+									{
+										hit = true;
+										b.dead = true;
+										break;
+
+									}
+
+								}
+
+								if(hit)
+									break;
+
+								std::list<Character>::iterator it;
+								for(it = characters.begin(); it != characters.end(); it++)
+								{
+									Character& character = (*it);
+									if(b.team != character.team)
+									{
+										sf::Vector2f cpos = character.getPosition();
+										sf::Vector2f diff = pos - cpos;
+										float dist = sqrt(pow(diff.x, 2) + pow(diff.y, 2));
+										float totalRadius = radius + character.getRadius();
+										float intersection = totalRadius - dist;
+										if(intersection > 0)
+										{
+											character.setHealth(character.health-b.damage);
+											character.lastHitter = b.owner;
+											hit = true;
+											b.dead = true;
+											break;
+
+										}
+
+									}
+
+								}
+
+								if(hit)
+									break;
+
+							}
+
+							if(b.dead)
+							{
+								newbullets.push(NewBulletData(sf::Vector2f(0, 0), l, character->netId));
+
+							}
+							else
+							{
+								b.owner = character->getName();
+								bullets.push_back(b);
+								newbullets.push(NewBulletData(b.getPosition(), l, character->netId));
+
+							}
+
+						}
+
+						if(input.throwing)
+						{
+							sf::Vector2f gp = character->getPosition();
+							float gr = input.aimAngle-90;
+							int gt = character->team;
+							grenades.push_back(Grenade(gp, gr, (Bullet::Team)gt, character->getName()));
+							sf::Packet gpacket;
+							gpacket << (int)GrenadeSync;
+							gpacket << gp.x << gp.y << gr << gt;
+							broadcast(peers, gpacket, NULL, 0, true, server, true);
+
+						}
+
 						character->input = input;
 						character->sprite.setRotation(input.aimAngle);
 						character->flare.setRotation(input.aimAngle);
@@ -2751,11 +2745,19 @@ void runServer()
 
 		}
 
-		if(shotweb)
+		if(newbullets.size() > 0)
 		{
+			sf::Packet bull;
+			bull << (int)Shoot;
+			bull << (unsigned int)newbullets.size();
+			while(!newbullets.empty())
+			{
+				newbullets.front().pack(bull);
+				newbullets.pop();
 
-			shootPacket << ((int8_t)-1);
-			broadcast(peers, shootPacket, NULL, 0, true, server, true);
+			}
+
+			broadcast(peers, bull, NULL, 1, false, server);
 
 		}
 
@@ -2848,6 +2850,21 @@ void runServer()
 					}
 
 					bulletIt++;
+
+				}
+
+				std::vector<Grenade>::iterator greIt;
+				for(greIt = grenades.begin(); greIt != grenades.end();)
+				{
+					if(greIt->dead)
+					{
+						greIt = grenades.erase(greIt);
+						continue;
+
+					}
+					greIt->update(characters);
+
+					greIt++;
 
 				}
 
@@ -3109,7 +3126,7 @@ void runServer()
 
 				}
 
-				if(frame%3 == 0) //sync player movement
+				if(frame%2 == 0) //sync player movement
 				{
 					sf::Packet s;
 					s << (int)Sync;
@@ -3146,7 +3163,7 @@ void runServer()
 		}
 
 		int milli = clock.getElapsedTime().asMilliseconds();
-		int waitTime = 22 - milli; /*17 is the number of millis per frame ... hopefully*/
+		int waitTime = 33 - milli; /*22 is the number of millis per frame ... hopefully*/
 		if(waitTime > 0)
 		{
 			sf::sleep(sf::milliseconds(waitTime));
@@ -3159,6 +3176,9 @@ void runServer()
 
 std::vector<std::string> goodNames;
 std::vector<std::string> badNames;
+
+sf::CircleShape bloomCursor;
+sf::CircleShape retic;
 
 bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 {
@@ -3189,6 +3209,19 @@ bool handleSpawn(std::vector<Character>& characters, sf::Packet& packet)
 		{
 			playerType = Character::Local;
 			me = true;
+			if(team == Bullet::Good)
+			{
+				bloomCursor.setOutlineColor(sf::Color(0, 255, 255));
+				retic.setFillColor(sf::Color(0, 255, 255, 80));
+
+			}
+			else
+			{
+				bloomCursor.setOutlineColor(sf::Color(255, 0, 0));
+				retic.setFillColor(sf::Color(255, 0, 0, 80));
+
+			}
+
 		}
 
 		bool found = false;
@@ -3305,45 +3338,98 @@ void handleLeave(std::vector<Character>& characters, std::string username)
 void handleShooting(std::vector<Character>& characters,
 		std::vector<Bullet>& bullets, sf::Packet& packet, int latency)
 {
-	while(true) //TODO: this is prolly crazy dangerous
+	unsigned int size = 0;
+	packet >> size;
+	for(unsigned int i = 0; i < size; i++)
 	{
-		sf::Vector2f pos;
-		float angle;
-		uint16_t netId;
-		packet >> netId >> pos.x >> pos.y >> angle;
-
-		for(unsigned int i = 0; i < characters.size(); i++)
+		NewBulletData data;
+		data.unpack(packet);
+		for(unsigned int j = 0; j < characters.size(); j++)
 		{
-			Character& character = characters[i];
-			if(character.netId == netId)
+			Character& character = characters[j];
+			if(character.netId == data.id)
 			{
-				character.bullet.set(pos, angle);
+				character.bullet.set(data.pos, data.angle);
 				character.bullet.owner = character.getName();
+				Bullet b(character.bullet);
 
-				float move = (float)latency/17.0;
-				character.bullet.update(move);
-				//TODO: handle sound and animation
+				float move = ((float)latency/2.0)/30.0;
+				while(move > 0)
+				{
+					bool hit = false;
+					b.update(0.25);
+					move -= 0.25;
+					sf::Vector2f pos = character.bullet.getPosition();
+					float radius = character.bullet.getRadius();
 
-				//TODO: step the bullet forward small increments so we can hit detect here
+					for(unsigned int j = 0; j < mapRects.size(); j++)
+					{
+						sf::FloatRect inter;
+						if(mapRects[j].getGlobalBounds().intersects(b.getBounds(), inter))
+						{
+							hit = true;
+							b.dead = true;
+							break;
 
-				bullets.push_back(character.bullet);
+						}
+
+					}
+
+					if(hit)
+					{
+						break;
+
+					}
+
+					for(unsigned int k = 0; k < characters.size(); k++)
+					{
+						Character& character = characters[k];
+						if(b.team != character.team)
+						{
+							sf::Vector2f cpos = character.getPosition();
+							sf::Vector2f diff = pos - cpos;
+							float dist = sqrt(pow(diff.x, 2) + pow(diff.y, 2));
+							float totalRadius = radius + character.getRadius();
+							float intersection = totalRadius - dist;
+							if(intersection > 0)
+							{
+								//character.setHealth(character.health-bullet.damage);
+								//client no longer in charge of changing players health
+								for(unsigned int l = 0; l < 20; l++)
+								{
+									float angle = rand()%360;
+									float speed = rand()%40+40;
+									sf::Vector2f v(speed*cos(angle*3.14159/180), speed*sin(angle*3.14159/180));
+									particles.emit("blood", pos, v, 0.5, 1.0);
+
+								}
+
+								hit = true;
+								b.dead = true;
+								break;
+
+							}
+
+						}
+
+					}
+
+					if(hit)
+					{
+						break;
+
+					}
+
+				}
+
+				if(!b.dead)
+					bullets.push_back(b);
+
 				character.flare.setFillColor(sf::Color(255, 255, 255, 255));
 				if(character.playerType == Character::Net)
-					playSound(character.fireSound, pos, 40.0);
+					playSound(character.fireSound, camPos, data.pos, 40.0);
 
-				return;
-
-			}
-
-		}
-
-		{
-			sf::Packet p = packet;
-			int8_t end = 0;
-			p >> end;
-			if(end == -1)
-			{
-				return;
+				break;
 
 			}
 
@@ -3541,6 +3627,7 @@ void handleCoreCaputred(std::vector<Character>& characters, std::string username
 void runClient()
 {
 	window.setView(guiView);
+	window.setMouseCursorVisible(false);
 
 	sf::RectangleShape ground(sf::Vector2f(4096, 1536));
 	ground.setTexture(&mapText);
@@ -3558,6 +3645,7 @@ void runClient()
 	std::vector<Character> characters;
 	std::vector<Bullet> bullets;
 	std::vector<Gib> gibs;
+	std::vector<Grenade> grenades;
 
 	gameInfo.setPosition(10, 10);
 
@@ -3649,13 +3737,19 @@ void runClient()
 
 	}
 
+	bloomCursor.setFillColor(sf::Color::Transparent);
+	bloomCursor.setOutlineThickness(2.5);
+	retic.setRadius(8);
+	retic.setOrigin(8, 8);
 	sf::Clock respawnTimer;
 	sf::Vector2f lastPos;
 	while(window.isOpen() && connected)
 	{
 		{
 		ENetEvent event;
-		if(enet_host_service(client, &event, 0) > 0)
+		sf::Clock pollTimer;
+		while(enet_host_service(client, &event, 0) > 0
+				&& pollTimer.getElapsedTime().asMilliseconds() < 15)
 		{
 			if(event.type == ENET_EVENT_TYPE_CONNECT)
 			{
@@ -3759,6 +3853,16 @@ void runClient()
 					handleCoreCaputred(characters, username, packet);
 
 				}
+				else if(cmd == GrenadeSync)
+				{
+					sf::Vector2f gp;
+					float gr;
+					int gt;
+					packet >> gp.x >> gp.y;
+					packet >> gr >> gt;
+					grenades.push_back(Grenade(gp, gr, (Bullet::Team)gt, ""));
+
+				}
 				else if(cmd == GameOver)
 				{
 					unsigned int team = Bullet::Good;
@@ -3843,7 +3947,7 @@ void runClient()
 		window.setView(gameView);
 
 		Input input;
-		input.set(window, gameView, lastPos);
+		input.set(window, gameView, lastPos, hasFocus);
 
 		window.clear(sf::Color::Black);
 		window.draw(ground);
@@ -3993,6 +4097,22 @@ void runClient()
 
 		}
 
+		std::vector<Grenade>::iterator greIt;
+		for(greIt = grenades.begin(); greIt != grenades.end();)
+		{
+			if(greIt->dead)
+			{
+				greIt = grenades.erase(greIt);
+				continue;
+
+			}
+			greIt->update();
+			greIt->draw(window);
+
+			greIt++;
+
+		}
+
 		for(unsigned int i = 0; i < characters.size(); i++)
 		{
 			Character& character = characters[i];
@@ -4004,6 +4124,25 @@ void runClient()
 
 				if(hasFocus)
 				{
+					bloomCursor.setPosition(input.raimPos);
+					bloomCursor.setRadius(character.aimSize);
+					bloomCursor.setOrigin(character.aimSize, character.aimSize);
+					retic.setPosition(input.raimPos);
+					if(character.shooting)
+					{
+						input.shooting = true;
+						input.flareAngle = character.flareAngle;
+						character.bullet.set(character.getShootPos(), character.getShootAngle());
+						Bullet b(character.bullet);
+						b.life = server->lastRoundTripTime/30.0*2;
+						character.fireSound.play();
+						bullets.push_back(Bullet(b));
+
+					}
+
+					if(character.input.throwing)
+						input.throwing = true;
+
 					sf::Packet p;
 					p << (int)SyncInput;
 					input.pack(p);
@@ -4022,20 +4161,6 @@ void runClient()
 			resolveCollisions(characters, i);
 			character.draw(window);
 
-			if(character.shooting)
-			{
-				sf::Packet s;
-				s << (int)Shoot;
-				s << character.getShootAngle();
-				send(server, s, 0, true, client);
-				character.bullet.set(character.getShootPos(), character.getShootAngle());
-				Bullet b(character.bullet);
-				b.life = server->lastRoundTripTime/17.0*2;
-				character.fireSound.play();
-				bullets.push_back(Bullet(b));
-
-			}
-
 		}
 
 		window.draw(trees);
@@ -4047,6 +4172,13 @@ void runClient()
 		}
 
 		window.draw(fountainShape);
+
+		if(!respawning)
+		{
+			window.draw(retic);
+			window.draw(bloomCursor);
+
+		}
 
 		window.setView(guiView);
 		gameInfo.update();
