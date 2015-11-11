@@ -17,6 +17,7 @@
 #include <SFML/System.hpp>
 #include <queue>
 #include "Misc.h"
+#include "TextBox.h"
 
 #ifdef __linux__
 #include <unistd.h>
@@ -31,25 +32,45 @@ bool spawned = false;
 #endif
 
 /*TODO: list
- * 1) ///DONE:smooth movement of proxy////
- * 			-I don't know if this truely works as I haven't been able to test with lag
- * 6) /////DONE-ISHcompress all the packets/////
- * 7) figure out if I can send less input packet stuff
- * 9) look into syncing the bullets better
- * 12) add a better menu system with a way to change your name set the server
- * 14) add server port to the server browser
- * 16) get different reload sounds
- * 17) get some hurt sounds
- * 18) //////DONE: add logging so it's easier to find skinneys bug and others/////
- * 			- maybe to conserviative on the messages ( might need to add more)
- * 19) ///DONE:smooth local players movement when replaying////
- * 			- I think I have, I haven't really gotten any major dsync from it yet
- * 20) /////DONE: make it so players appear in the tab list even if dead /////
- * 			- unfortunately they have to spawn at least once
- * 22) add more team specific info - like whoes core stolen - point to core if it's stolen
- * 24) add spec controls for when dead
- * 25) collate more information into a single packet
- * 26) in init command sync who has the flag
+ * 1) fix bug where you can't fire when you are being corrected by the server
+ * 2) add a better menu system with a way to change your name set the server
+ * 3) add server port to the server browser
+ * 4) get different reload sounds
+ * 5) get some hurt sounds
+ * 6) add kill confirmation message in the middle of the screen
+ * 7) in init command sync who has the flag
+ * 8) add class selection
+ * 9) make classes more unique and each more playable
+ * 10) figure out some map format
+ * 11) make better maps
+ * 12) add a team slayer mode
+ * 13) /////DONE: make it so the joining screen doesn't freeze and you can exit out of it at will/////
+ * 14) add unlerp to player correction and make it better than before if possible
+ * 15) make the counter on the grenade more noticeable
+ * 16) add rolling/dashing
+ * 17) make the grenades more abundant and easier to throw
+ * 18) work on equalizing the sounds again
+ * 20) start to get rid of some of the debug data?
+ * 		- gibs/bullets/grenades don't need shape circles (map might still need them)
+ * 21) remove ghosts from players once I'm happy with movement smoothing
+ * 22) add some more items like medkit or baricade
+ * 23) add item drops or some way to get more items
+ * 24) maybe add a way so you can pickup weapons? - I don't really want to implement weapon pickup switches
+ * 25) SCRAMBLE TEAMS AFTER EACH ROUND
+ * 26) add multiple spawn points per team to a map
+ * 27) add some kind of door that can open close when player is near by (make maps a lot better)
+ * 28) make ai players respawn, shoot, and actually try and do stuff
+ * 29) add a way to name your server something other than "username's server"
+ * 30) make the buttons in the browser resize
+ * 31) add settings somewhere in the menu
+ * 		- add volume setting
+ * 		- debug setting
+ * 32) add chat!!! (because that's the best)
+ * 		- add chat logs
+ * 33) potentially add king of the hill gamemode or capture point with hacking minigame
+ * 34) if I make the map format easy add a way for the player to download the map when they join the server
+ * 35) add user registration system that stores a user key (generated from php)
+ * 			or use a password system and tell people not to use a real password.
  */
 
 typedef enum NetCommand
@@ -430,7 +451,7 @@ public:
 			sf::RenderStates states = sf::RenderStates::Default)
 	{
 		states.transform *= getTransform();
-		window.draw(shape, states);
+		//window.draw(shape, states);
 		window.draw(sprite, states);
 
 	}
@@ -1001,7 +1022,7 @@ public:
 
 		window.draw(sprite, states);
 
-		window.draw(ghost);
+		//window.draw(ghost);
 
 		states.shader = NULL;
 		window.draw(nameTag, states);
@@ -1441,6 +1462,118 @@ public:
 	sf::Text ammoText;
 
 	float aimSize;
+
+};
+
+class Decoy : public sf::Transformable
+{
+public:
+	Decoy(sf::Vector2f pos,
+			float angle,
+			Bullet::Team team,
+			sf::Vector2f vel) :
+		team(team),
+		vel(vel*1.5f)
+	{
+		setPosition(pos);
+		shape.setRadius(24);
+		shape.setOrigin(24, 2);
+		shape.setFillColor(sf::Color::Transparent);
+		if(team == Bullet::Good)
+			shape.setOutlineColor(sf::Color::Red);
+		else
+			shape.setOutlineColor(sf::Color::Blue);
+		shape.setOutlineThickness(1.5);
+
+		sprite.setSize(sf::Vector2f(127, 230)*0.5f);
+		sprite.setOrigin(sf::Vector2f(67, 177)*0.5f);
+		sprite.setTexture(&charactersText);
+		sprite.setTextureRect(sf::IntRect(456, 0, 127, 230));
+		sprite.setFillColor(sf::Color(240, 240, 255, 240));
+
+		dead = false;
+
+		sprite.setRotation(angle);
+		frame = 0;
+
+		if(!g_isServer)
+			playSound(woosh, camPos, getPosition(), 100.0f);
+
+	}
+
+	sf::FloatRect getBounds()
+	{
+		sf::FloatRect bounds = shape.getGlobalBounds();
+		bounds.left += getPosition().x;
+		bounds.top += getPosition().y;
+		return bounds;
+
+	}
+
+	void update()
+	{
+		frame++;
+		if(frame >= 30*10)
+			dead = true;
+
+		move(vel);
+		vel *= 0.93f;
+
+		for(unsigned int j = 0; j < mapRects.size(); j++)
+		{
+			sf::FloatRect inter;
+			if(mapRects[j].getGlobalBounds().intersects(getBounds(), inter))
+			{
+				if(inter.width > inter.height)
+				{
+					vel.y *= -0.83;
+					if(getPosition().y > inter.top)
+						move(0, inter.height);
+					else
+
+						move(0, -inter.height);
+
+				}
+				else
+				{
+					vel.x *= -0.83;
+					if(getPosition().x > inter.left)
+						move(inter.width, 0);
+					else
+						move(-inter.width, 0);
+
+				}
+
+			}
+
+		}
+
+	}
+
+	void update(std::list<Character>& characters)
+	{
+		update();
+
+	}
+
+	void draw(sf::RenderWindow& window,
+			sf::RenderStates states = sf::RenderStates::Default)
+	{
+		states.transform *= getTransform();
+		window.draw(shape, states);
+		window.draw(sprite, states);
+
+		if(counter > 10)
+			window.draw(counterText, states);
+
+	}
+
+	sf::Vector2f vel;
+	Bullet::Team team;
+	sf::RectangleShape sprite;
+	sf::CircleShape shape;
+	bool dead;
+	int frame;
 
 };
 
@@ -2071,32 +2204,7 @@ void spawnServer()
 
 int main(int argc, char** argv)
 {
-	if(!readConfig())
-	{
-		std::cout << "Please set your username:\n";
-		std::string username;
-		std::cin >> username;
-		cl_username = username;
-		sv_port = 50301;
-		sv_ip = "localhost";
-
-		std::ofstream f;
-		f.open("settings.cfg");
-		if(f)
-		{
-			f << cl_username << "\n";
-			f << sv_ip << "\n";
-			f << sv_port << "\n";
-
-		}
-		else
-		{
-			std::cout << "can't write to config :C\n";
-
-		}
-		f.close();
-
-	}
+	bool hasConfig = readConfig();
 
 	if(argc > 1)
 		g_isServer = true;
@@ -2123,7 +2231,10 @@ int main(int argc, char** argv)
 
 		bool browsing = false;
 
-		Button join(font, "Join", sf::Vector2f(854/2, 240),
+		Button direct(font, "Direct Conn.", sf::Vector2f(854/2, 240),
+				sf::Vector2f(192, 32));
+
+		Button join(font, "Join", sf::Vector2f(854/2, 240 + 64),
 				sf::Vector2f(192, 32));
 
 		Button browse(font, "Browse", sf::Vector2f(854/2, 240 - 64),
@@ -2136,10 +2247,22 @@ int main(int argc, char** argv)
 		Button back(font, "Back", sf::Vector2f(96+10, 16+10),
 				sf::Vector2f(192, 32));
 
+		Button setb(font, "Settings", sf::Vector2f(854/2, 240+128),
+				sf::Vector2f(192, 32));
+
+		Button setn(font, "Set Name", sf::Vector2f(427 - 427/2, 240+64),
+				sf::Vector2f(192, 32));
+
+		bool onsettings = false;
+		bool onsetn = false;
+		bool directCon = false;
+
 		std::vector<Button> servers;
 		std::vector<std::string> serverips;
 		sf::Text noservers("No Servers are up :C", font);
 		noservers.setPosition(854/2 - 175, 240);
+
+		TextBox textBox(sf::Vector2f(854/2, 200), font, sf::Vector2f(192*2, 32));
 
 		while(window.isOpen())
 		{
@@ -2153,11 +2276,103 @@ int main(int argc, char** argv)
 
 				}
 
+				textBox.update(event);
+
 			}
 
 			window.clear(sf::Color(90, 90, 90));
 
-			if(browsing)
+			if(!hasConfig)
+			{
+				if(textBox.draw(window))
+				{
+					std::string username =  textBox.getString();
+					cl_username = username;
+					sv_port = 50301;
+					sv_ip = "localhost";
+
+					std::ofstream f;
+					f.open("settings.cfg");
+					if(f)
+					{
+						f << cl_username << "\n";
+						f << sv_ip << "\n";
+						f << sv_port << "\n";
+
+					}
+					else
+					{
+						std::cout << "can't write to config :C\n";
+
+					}
+					f.flush();
+					f.close();
+					hasConfig = true;
+					textBox.clear();
+
+				}
+
+			}
+			else if(directCon)
+			{
+				if(textBox.draw(window) || join.update(window, guiView))
+				{
+					sv_ip = textBox.getString();
+					std::ofstream f;
+					f.open("settings.cfg");
+					f << cl_username << "\n";
+					f << sv_ip << "\n";
+					f << sv_port << "\n";
+					f.flush();
+					f.close();
+					textBox.clear();
+					break;
+
+				}
+
+				if(back.update(window, guiView))
+				{
+					textBox.clear();
+					directCon = false;
+
+				}
+
+			}
+			else if(onsetn)
+			{
+				if(textBox.draw(window))
+				{
+					cl_username = textBox.getString();
+					std::ofstream f;
+					f.open("settings.cfg");
+					f << cl_username << "\n";
+					f << sv_ip << "\n";
+					f << sv_port << "\n";
+					f.flush();
+					f.close();
+					onsetn = false;
+					textBox.clear();
+
+				}
+
+			}
+			else if(onsettings)
+			{
+				if(setn.update(window, guiView))
+				{
+					textBox.clear();
+					textBox.realText = cl_username;
+					onsetn = true;
+
+				}
+
+				if(back.update(window, guiView))
+				{
+					onsettings = false;
+
+				}
+			}
+			else if(browsing)
 			{
 				if(servers.size() == 0)
 					window.draw(noservers);
@@ -2246,9 +2461,11 @@ int main(int argc, char** argv)
 
 				}
 
-				if(join.update(window, guiView))
+				if(direct.update(window, guiView))
 				{
-					break;
+					textBox.clear();
+					textBox.realText = sv_ip;
+					directCon = true;
 
 				}
 
@@ -2256,6 +2473,12 @@ int main(int argc, char** argv)
 				{
 					spawnServer();
 					break;
+
+				}
+
+				if(setb.update(window, guiView))
+				{
+					onsettings = true;
 
 				}
 
@@ -3677,6 +3900,19 @@ void runClient()
 	{
 		if(constate == 0)
 			server = enet_host_connect(client, &address, 2, 0);
+
+		sf::Event e;
+		while(window.pollEvent(e))
+		{
+			if(e.type == sf::Event::Closed)
+			{
+				window.close();
+				enet_peer_reset(server);
+				return;
+
+			}
+
+		}
 
 		window.clear(sf::Color::White);
 		window.draw(conStatus);
